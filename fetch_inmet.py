@@ -77,14 +77,12 @@ def find_zip_links(html: str) -> List[str]:
 def iter_csv_from_zip(content: bytes) -> Iterable[Tuple[str, bytes]]:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
         for info in zf.infolist():
-            # CORREÇÃO: Ignorar diretórios e processar qualquer CSV
             if info.is_dir():
                 continue
                 
             if info.filename.lower().endswith(".csv"):
                 try:
                     with zf.open(info) as f:
-                        # Usar apenas nome do arquivo (ignorar caminho)
                         base_name = os.path.basename(info.filename)
                         yield base_name, f.read()
                 except Exception as e:
@@ -146,6 +144,30 @@ def try_read_csv(bytes_content: bytes) -> pd.DataFrame:
         print(f"⚠️ Falha crítica na leitura do CSV: {e}")
         return pd.DataFrame()
 
+def combine_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Combina colunas de data e hora em um único datetime
+    """
+    if "DATA" in df.columns and "HORA_UTC" in df.columns:
+        try:
+            # Converter hora UTC para string formatada
+            df["HORA_UTC"] = df["HORA_UTC"].astype(str).str.zfill(4)
+            df["HORA_UTC"] = df["HORA_UTC"].str[:2] + ':' + df["HORA_UTC"].str[2:]
+            
+            # Combinar com data
+            df["DATETIME"] = pd.to_datetime(
+                df["DATA"].dt.strftime('%Y-%m-%d') + ' ' + df["HORA_UTC"],
+                errors='coerce'
+            )
+            df = df.drop(columns=["DATA", "HORA_UTC"], errors="ignore")
+        except Exception as e:
+            print(f"⚠️ Erro ao combinar data e hora: {e}")
+            df["DATETIME"] = pd.to_datetime(df["DATA"], errors='coerce')
+    elif "DATA" in df.columns:
+        df["DATETIME"] = pd.to_datetime(df["DATA"], errors='coerce')
+    
+    return df
+
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     def norm(c):
         c2 = unicodedata.normalize("NFKD", str(c)).encode("ascii", "ignore").decode("ascii").upper()
@@ -173,6 +195,9 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
             df["DATA"] = pd.to_datetime(df["DATA"], errors="coerce", dayfirst=True)
         except:
             pass
+    
+    # COMBINAR DATA E HORA EM UM ÚNICO DATETIME
+    df = combine_datetime_columns(df)
     
     numeric_cols = [col for col in df.columns if any(kw in col for kw in 
                    ["TEMP", "UMID", "PREC", "PRES", "RAD", "VENTO"])]
@@ -239,7 +264,7 @@ def download_and_extract_for_year(session: requests.Session, year: int, out_raw:
                     df = try_read_csv(bytes_csv)
                     if not df.empty:
                         df = normalize_columns(df)
-                        if "DATA" in df.columns:
+                        if "DATETIME" in df.columns:
                             out_dfs.append(df)
                             csv_count += 1
                             print(f"✅ Dados válidos encontrados: {len(df)} registros")
@@ -266,7 +291,6 @@ def get_neon_connection():
             
         conn = psycopg2.connect(neon_url, sslmode="require")
         
-        # Teste de conexão aprimorado
         cur = conn.cursor()
         cur.execute("SELECT 1")
         result = cur.fetchone()
@@ -293,7 +317,7 @@ def upload_to_neon(df: pd.DataFrame):
 
     # Mapeamento de colunas para a estrutura do banco
     column_mapping = {
-        "data": "DATA",
+        "data": "DATETIME",  # Usar o datetime combinado
         "temperatura_media": ["TEMPERATURA_MEDIA", "TEMP_MEDIA"],
         "temperatura_maxima": ["TEMPERATURA_MAXIMA", "TEMP_MAX"],
         "temperatura_minima": ["TEMPERATURA_MINIMA", "TEMP_MIN"],
@@ -305,7 +329,7 @@ def upload_to_neon(df: pd.DataFrame):
     
     # Prepara DataFrame para inserção
     output_df = pd.DataFrame()
-    output_df["data"] = pd.to_datetime(df["DATA"], errors="coerce")
+    output_df["data"] = pd.to_datetime(df["DATETIME"], errors="coerce")
     
     for neon_col, source_cols in column_mapping.items():
         if neon_col == "data":
@@ -328,7 +352,7 @@ def upload_to_neon(df: pd.DataFrame):
         print("ℹ️ Nenhum registro válido após preparação")
         return
 
-    # VERIFICAÇÃO DE COMPATIBILIDADE
+    # Verificação de compatibilidade
     print("🔍 Verificando compatibilidade com esquema do NEON:")
     required_columns = [
         "data", "temperatura_media", "temperatura_maxima", "temperatura_minima",
@@ -445,14 +469,14 @@ def main():
         print("ℹ️ Nenhum dado encontrado para os anos solicitados")
         return
 
-    valid_dfs = [df for df in all_dfs if "DATA" in df.columns and not df.empty]
+    valid_dfs = [df for df in all_dfs if "DATETIME" in df.columns and not df.empty]
     if not valid_dfs:
-        print("ℹ️ Nenhum dado válido com coluna DATA encontrado")
+        print("ℹ️ Nenhum dado válido com coluna DATETIME encontrado")
         return
 
     df_all = pd.concat(valid_dfs, ignore_index=True)
-    df_all = df_all.dropna(subset=["DATA"]).sort_values("DATA")
-    df_all = df_all.drop_duplicates(subset=["DATA"], keep="last")
+    df_all = df_all.dropna(subset=["DATETIME"]).sort_values("DATETIME")
+    df_all = df_all.drop_duplicates(subset=["DATETIME"], keep="last")
     
     print(f"📊 Total de registros processados: {len(df_all)}")
     upload_to_neon(df_all)
@@ -460,4 +484,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

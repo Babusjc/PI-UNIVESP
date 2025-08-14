@@ -27,6 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Etapa adicionada para verificar disponibilidade do INMET
+      - name: Verify INMET connection
+        run: |
+          if ! curl -s -I -m 30 "https://portal.inmet.gov.br" | grep "200 OK"; then
+            echo "::error::INMET site is down, aborting workflow"
+            exit 1
+          fi
+
       - name: FETCH INMET DATA
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}  # Usa o segredo

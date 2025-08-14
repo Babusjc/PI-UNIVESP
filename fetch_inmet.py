@@ -20,12 +20,23 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
 ]
 
-def slugify(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    text = re.sub(r"[^a-zA-Z0-9]+", "_", text)
-    return text.strip("_").lower()
+# Código da estação alvo
+STATION_CODE = "A740"
 
-TARGET_SLUG = slugify("SAO LUIZ DO PARAITINGA")
+def normalize_station_name(name: str) -> str:
+    """Normaliza o nome da estação para facilitar a comparação."""
+    name = name.lower()
+    # Substitui variações de escrita
+    name = re.sub(r"[^a-z0-9]+", " ", name)  # Remove caracteres especiais
+    name = re.sub(r"\bsao\b", "são", name)    # Padroniza "sao" para "são"
+    name = re.sub(r"\bluis\b", "luiz", name)  # Padroniza "luis" para "luiz"
+    return name.strip()
+
+def is_target_station(filename: str) -> bool:
+    """Verifica se o arquivo é da estação desejada pelo código ou nome normalizado."""
+    normalized = normalize_station_name(filename)
+    # Verifica pelo código da estação ou pelo nome padronizado
+    return STATION_CODE.lower() in normalized or "são luiz do paraitinga" in normalized
 
 def get(session: requests.Session, url: str, retries=3, delay=5, **kw) -> requests.Response:
     for attempt in range(retries):
@@ -71,8 +82,11 @@ def iter_csv_from_zip(content: bytes) -> Iterable[Tuple[str, bytes]]:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
         for info in zf.infolist():
             if info.filename.lower().endswith(".csv"):
-                with zf.open(info) as f:
-                    yield info.filename, f.read()
+                try:
+                    with zf.open(info) as f:
+                        yield info.filename, f.read()
+                except Exception as e:
+                    print(f"⚠️ Erro ao extrair {info.filename}: {e}")
 
 def try_read_csv(bytes_content: bytes) -> pd.DataFrame:
     encodings = ["latin-1", "utf-8-sig", "utf-8"]
@@ -103,9 +117,6 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "DATA" in df.columns:
         df["DATA"] = pd.to_datetime(df["DATA"], errors="coerce", dayfirst=True)
     return df
-
-def is_target_station(filename: str) -> bool:
-    return TARGET_SLUG in slugify(filename)
 
 def download_and_extract_for_year(session: requests.Session, year: int, out_raw: Path):
     print(f"⏳ Processando ano {year}...")
@@ -170,6 +181,8 @@ def download_and_extract_for_year(session: requests.Session, year: int, out_raw:
                     if not df.empty:
                         out_dfs.append(normalize_columns(df))
                         csv_count += 1
+                else:
+                    print(f"❌ CSV ignorado: {fname} - não corresponde à estação alvo")
             
             print(f"📊 {csv_count} arquivos CSV processados para {year}")
         except Exception as e:
@@ -179,10 +192,20 @@ def download_and_extract_for_year(session: requests.Session, year: int, out_raw:
 
 def get_neon_connection():
     try:
-        conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL"))
+        # Adicionar verificação de variável de ambiente
+        neon_url = os.getenv("NEON_DATABASE_URL")
+        if not neon_url:
+            print("🚫 Variável NEON_DATABASE_URL não configurada")
+            return None
+            
+        # Forçar conexão SSL
+        conn = psycopg2.connect(
+            neon_url,
+            sslmode="require"
+        )
         return conn
     except Exception as e:
-        print(f"🚫 Erro ao conectar ao NEON: {e}")
+        print(f"🚫 Erro detalhado ao conectar ao NEON: {str(e)}")
         return None
 
 def upload_to_neon(df: pd.DataFrame):

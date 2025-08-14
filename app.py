@@ -12,6 +12,19 @@ import psycopg2
 from dotenv import load_dotenv
 import time
 
+
+def get_neon_connection():
+    """Cria e retorna uma conexão com o banco NEON."""
+    try:
+        # Esta linha agora vai ler o valor correto dos Secrets do Streamlit
+        conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL"))
+        return conn
+    except Exception as e:
+        st.error(f"Erro ao conectar ao NEON: {e}")
+        return None
+
+
+
 # Carrega variáveis de ambiente do arquivo .env (se existir)
 load_dotenv()
 

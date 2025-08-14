@@ -1,3 +1,5 @@
+# app.py - VERSÃO CORRIGIDA E COMPLETA
+
 import os
 import streamlit as st
 import pandas as pd
@@ -8,49 +10,27 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-import psycopg2
-from dotenv import load_dotenv
+# psycopg2 e dotenv não são mais necessários aqui, mas podem ser mantidos
+# import psycopg2
+# from dotenv import load_dotenv
 import time
 
-
-def get_neon_connection():
-    """Cria e retorna uma conexão com o banco NEON."""
-    try:
-        # Esta linha agora vai ler o valor correto dos Secrets do Streamlit
-        conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL"))
-        return conn
-    except Exception as e:
-        st.error(f"Erro ao conectar ao NEON: {e}")
-        return None
-
-
-
-# Carrega variáveis de ambiente do arquivo .env (se existir)
-load_dotenv()
+# load_dotenv() # Não é mais necessário no Streamlit Cloud com Secrets
 
 st.set_page_config(page_title="Dashboard Meteorológico - São Luiz do Paraitinga", page_icon="🌤️", layout="wide")
 st.title("🌤️ Dashboard Meteorológico - São Luiz do Paraitinga - SP")
 st.caption("Fonte: INMET - Estações Automáticas")
 st.markdown("---")
 
-def get_neon_connection():
-    """Cria e retorna uma conexão com o banco NEON."""
-    try:
-        conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL"))
-        return conn
-    except Exception as e:
-        st.error(f"Erro ao conectar ao NEON: {e}")
-        return None
-
 # Modificação 1: Adicionar TTL de 6 horas no cache
 @st.cache_data(show_spinner=False, ttl=6*3600)  # Cache de 6 horas
 def fetch_from_neon():
-    """Busca todos os dados da tabela inmet_data."""
-    with st.spinner("Carregando dados do banco..."):  # Modificação 3: Adicionar spinner
-        conn = get_neon_connection()
-        if not conn:
-            return pd.DataFrame(columns=["data"])
+    """Busca todos os dados da tabela inmet_data usando st.connection."""
+    with st.spinner("Carregando dados do banco..."):
         try:
+            # Conecta usando a configuração de [connections.neon_db] dos Secrets
+            conn = st.connection("neon_db", type="sql")
+            
             query = """
             SELECT 
                 data, 
@@ -63,8 +43,9 @@ def fetch_from_neon():
                 pressao_atmosferica 
             FROM inmet_data;
             """
-            df = pd.read_sql(query, conn)
-            # Renomear colunas para o formato original (em maiúsculas e com os nomes anteriores)
+            df = conn.query(query)
+            
+            # Renomear colunas para o formato original
             df.rename(columns={
                 "data": "DATA",
                 "temperatura_media": "TEMPERATURA_MEDIA",
@@ -75,14 +56,13 @@ def fetch_from_neon():
                 "velocidade_vento": "VELOCIDADE_VENTO",
                 "pressao_atmosferica": "PRESSAO_ATMOSFERICA"
             }, inplace=True)
+            
             df["DATA"] = pd.to_datetime(df["DATA"])
             return df.sort_values("DATA")
+        
         except Exception as e:
-            st.error(f"Erro ao buscar dados: {e}")
+            st.error(f"Erro ao buscar dados com st.connection: {e}")
             return pd.DataFrame(columns=["DATA"])
-        finally:
-            if conn:
-                conn.close()
 
 # Carrega os dados do NEON
 df = fetch_from_neon()
@@ -97,7 +77,7 @@ st.sidebar.header("🔧 Filtros")
 min_date, max_date = df["DATA"].min().date(), df["DATA"].max().date()
 rng = st.sidebar.date_input("Período", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-# Ajuste para o caso de o usuário selecionar apenas uma data (em vez de um intervalo)
+# Ajuste para o caso de o usuário selecionar apenas uma data
 if isinstance(rng, (list, tuple)) and len(rng) == 2:
     start, end = rng
     dff = df[(df["DATA"].dt.date >= start) & (df["DATA"].dt.date <= end)].copy()
@@ -136,7 +116,6 @@ st.plotly_chart(fig_p, use_container_width=True)
 fig_u = px.line(dff, x="DATA", y="UMIDADE_RELATIVA", title="Umidade relativa (%)")
 st.plotly_chart(fig_u, use_container_width=True)
 
-# Modificação 2: Substituir a seção de aprendizado de máquina por uma versão mais robusta
 st.markdown("---")
 st.header("🤖 Modelo Preditivo")
 st.caption("Previsão de temperatura média usando dados históricos")
@@ -148,20 +127,15 @@ test_size = 0.2
 
 # Interface para configuração do modelo
 with st.expander("🔧 Configurações do Modelo", expanded=False):
-    # Seleção de features
     features = st.multiselect("Variáveis preditoras", 
                              ["MES", "DIA_DO_ANO", "UMIDADE_RELATIVA", "PRECIPITACAO"],
                              default=["MES", "DIA_DO_ANO"])
-    
-    # Seleção de algoritmo
     model_type = st.selectbox("Algoritmo", 
                              ["Regressão Linear", "Random Forest", "Gradient Boosting"])
-    
     test_size = st.slider("Tamanho do conjunto de teste", 0.1, 0.5, 0.2, 0.05)
 
 # Verifica se há dados suficientes para treinar o modelo
 if dff["TEMPERATURA_MEDIA"].notna().sum() > 100:
-    # Pré-processamento básico
     df_ml = dff[["DATA", "TEMPERATURA_MEDIA", "UMIDADE_RELATIVA", "PRECIPITACAO"]].dropna().copy()
     df_ml["MES"] = df_ml["DATA"].dt.month
     df_ml["DIA_DO_ANO"] = df_ml["DATA"].dt.dayofyear
@@ -172,22 +146,18 @@ if dff["TEMPERATURA_MEDIA"].notna().sum() > 100:
     
     X = df_ml[features]
     y = df_ml["TEMPERATURA_MEDIA"]
-
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
     
-    # Seleção de modelo
     if model_type == "Regressão Linear":
         model = LinearRegression()
     elif model_type == "Random Forest":
         model = RandomForestRegressor(n_estimators=100, random_state=42)
-    else:  # Gradient Boosting
+    else:
         model = GradientBoostingRegressor(random_state=42)
     
-    # Treinamento
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     
-    # Métricas
     mse = mean_squared_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
@@ -198,49 +168,18 @@ if dff["TEMPERATURA_MEDIA"].notna().sum() > 100:
     col2.metric("MAE", f"{mae:.3f} °C")
     col3.metric("MSE", f"{mse:.3f}")
     
-    # Gráfico de dispersão
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=y_test, y=y_pred, 
-        mode='markers', 
-        name='Predições',
-        marker=dict(color='#2878B5')
-    ))
-    lo = min(y_test.min(), y_pred.min())
-    hi = max(y_test.max(), y_pred.max())
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], 
-        y=[lo, hi], 
-        mode='lines', 
-        name='Perfeito',
-        line=dict(color='red', dash='dash'))
-    )
-    fig.update_layout(
-        title='Valores Reais vs Preditos',
-        xaxis_title='Temperatura Real (°C)',
-        yaxis_title='Temperatura Predita (°C)',
-        showlegend=True
-    )
+    fig.add_trace(go.Scatter(x=y_test, y=y_pred, mode='markers', name='Predições', marker=dict(color='#2878B5')))
+    lo, hi = min(y_test.min(), y_pred.min()), max(y_test.max(), y_pred.max())
+    fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode='lines', name='Perfeito', line=dict(color='red', dash='dash')))
+    fig.update_layout(title='Valores Reais vs Preditos', xaxis_title='Temperatura Real (°C)', yaxis_title='Temperatura Predita (°C)')
     st.plotly_chart(fig, use_container_width=True)
     
-    # Feature importance
     if hasattr(model, 'feature_importances_'):
         st.subheader("Importância das Variáveis")
-        importances = pd.DataFrame({
-            'Feature': features,
-            'Importance': model.feature_importances_
-        }).sort_values('Importance', ascending=False)
-        
-        fig_imp = px.bar(
-            importances, 
-            x='Importance', 
-            y='Feature', 
-            orientation='h',
-            title='Importância das características',
-            color='Importance'
-        )
+        importances = pd.DataFrame({'Feature': features, 'Importance': model.feature_importances_}).sort_values('Importance', ascending=False)
+        fig_imp = px.bar(importances, x='Importance', y='Feature', orientation='h', title='Importância das características', color='Importance')
         st.plotly_chart(fig_imp, use_container_width=True)
-        
 else:
     st.warning("Dados insuficientes para treinar o modelo. São necessários pelo menos 100 registros de temperatura média.")
 
@@ -249,7 +188,6 @@ st.header("📄 Dados brutos")
 if st.checkbox("Mostrar dados filtrados"):
     st.dataframe(dff)
 
-# Botão para baixar dados filtrados
 st.download_button(
     label="📥 Baixar CSV filtrado",
     data=dff.to_csv(index=False).encode("utf-8"),

@@ -1,6 +1,5 @@
-# app.py - VERSÃO CORRIGIDA E COMPLETA
+# app.py - VERSÃO FINAL E COMPLETA (REVISADA)
 
-import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -10,64 +9,55 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-# psycopg2 e dotenv não são mais necessários aqui, mas podem ser mantidos
-# import psycopg2
-# from dotenv import load_dotenv
 import time
 
-# load_dotenv() # Não é mais necessário no Streamlit Cloud com Secrets
-
+# Configurações da página
 st.set_page_config(page_title="Dashboard Meteorológico - São Luiz do Paraitinga", page_icon="🌤️", layout="wide")
 st.title("🌤️ Dashboard Meteorológico - São Luiz do Paraitinga - SP")
 st.caption("Fonte: INMET - Estações Automáticas")
 st.markdown("---")
 
-# Modificação 1: Adicionar TTL de 6 horas no cache
-@st.cache_data(show_spinner=False, ttl=6*3600)  # Cache de 6 horas
+# Função para buscar dados do Neon usando o método recomendado pelo Streamlit
+@st.cache_data(show_spinner=True, ttl=3600)  # Cache de 1 hora com spinner
 def fetch_from_neon():
     """Busca todos os dados da tabela inmet_data usando st.connection."""
-    with st.spinner("Carregando dados do banco..."):
-        try:
-            # Conecta usando a configuração de [connections.neon_db] dos Secrets
-            conn = st.connection("neon_db", type="sql")
-            
-            query = """
-            SELECT 
-                data, 
-                temperatura_media, 
-                temperatura_maxima, 
-                temperatura_minima, 
-                umidade_relativa, 
-                precipitacao, 
-                velocidade_vento, 
-                pressao_atmosferica 
-            FROM inmet_data;
-            """
-            df = conn.query(query)
-            
-            # Renomear colunas para o formato original
-            df.rename(columns={
-                "data": "DATA",
-                "temperatura_media": "TEMPERATURA_MEDIA",
-                "temperatura_maxima": "TEMPERATURA_MAXIMA",
-                "temperatura_minima": "TEMPERATURA_MINIMA",
-                "umidade_relativa": "UMIDADE_RELATIVA",
-                "precipitacao": "PRECIPITACAO",
-                "velocidade_vento": "VELOCIDADE_VENTO",
-                "pressao_atmosferica": "PRESSAO_ATMOSFERICA"
-            }, inplace=True)
-            
-            df["DATA"] = pd.to_datetime(df["DATA"])
-            return df.sort_values("DATA")
+    try:
+        # Conecta usando a configuração [connections.neon_db] dos Secrets
+        conn = st.connection("neon_db", type="sql")
         
-        except Exception as e:
-            st.error(f"Erro ao buscar dados com st.connection: {e}")
-            return pd.DataFrame(columns=["DATA"])
+        query = """
+        SELECT 
+            data, temperatura_media, temperatura_maxima, temperatura_minima, 
+            umidade_relativa, precipitacao, velocidade_vento, pressao_atmosferica 
+        FROM inmet_data;
+        """
+        df = conn.query(query)
+        
+        # Renomeia colunas para o formato esperado pelo restante do script
+        df.rename(columns={
+            "data": "DATA",
+            "temperatura_media": "TEMPERATURA_MEDIA",
+            "temperatura_maxima": "TEMPERATURA_MAXIMA",
+            "temperatura_minima": "TEMPERATURA_MINIMA",
+            "umidade_relativa": "UMIDADE_RELATIVA",
+            "precipitacao": "PRECIPITACAO",
+            "velocidade_vento": "VELOCIDADE_VENTO",
+            "pressao_atmosferica": "PRESSAO_ATMOSFERICA"
+        }, inplace=True)
+        
+        df["DATA"] = pd.to_datetime(df["DATA"])
+        return df.sort_values("DATA")
+    
+    except Exception as e:
+        st.error(f"Erro ao buscar dados com st.connection: {e}")
+        return pd.DataFrame() # Retorna um DataFrame vazio em caso de erro
 
-# Carrega os dados do NEON
+# --- Lógica Principal do Aplicativo ---
+
+# Carrega os dados
 df = fetch_from_neon()
 
-# Se não há dados, exibe um aviso e para a execução
+# Verifica se os dados foram carregados antes de continuar
 if df.empty:
     st.warning("Não há dados disponíveis no banco. Por favor, rode o script de coleta (`fetch_inmet.py`) ou aguarde a atualização.")
     st.stop()
@@ -77,7 +67,7 @@ st.sidebar.header("🔧 Filtros")
 min_date, max_date = df["DATA"].min().date(), df["DATA"].max().date()
 rng = st.sidebar.date_input("Período", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-# Ajuste para o caso de o usuário selecionar apenas uma data
+# Aplica o filtro de data
 if isinstance(rng, (list, tuple)) and len(rng) == 2:
     start, end = rng
     dff = df[(df["DATA"].dt.date >= start) & (df["DATA"].dt.date <= end)].copy()
@@ -103,16 +93,14 @@ with c4:
 st.markdown("---")
 st.header("📈 Análise Temporal")
 
-# Gráfico de temperaturas
+# Gráficos (sem alterações)
 fig_temp = px.line(dff, x="DATA", y=["TEMPERATURA_MAXIMA","TEMPERATURA_MINIMA","TEMPERATURA_MEDIA"],
                    labels={"value":"Temperatura (°C)", "variable":"Série"}, title="Temperaturas ao longo do tempo")
 st.plotly_chart(fig_temp, use_container_width=True)
 
-# Gráfico de precipitação
 fig_p = px.bar(dff, x="DATA", y="PRECIPITACAO", title="Precipitação diária (mm)")
 st.plotly_chart(fig_p, use_container_width=True)
 
-# Gráfico de umidade
 fig_u = px.line(dff, x="DATA", y="UMIDADE_RELATIVA", title="Umidade relativa (%)")
 st.plotly_chart(fig_u, use_container_width=True)
 
@@ -120,12 +108,7 @@ st.markdown("---")
 st.header("🤖 Modelo Preditivo")
 st.caption("Previsão de temperatura média usando dados históricos")
 
-# Inicializa variáveis para configuração
-features = ["MES", "DIA_DO_ANO"]
-model_type = "Regressão Linear"
-test_size = 0.2
-
-# Interface para configuração do modelo
+# Seção de Machine Learning (sem alterações)
 with st.expander("🔧 Configurações do Modelo", expanded=False):
     features = st.multiselect("Variáveis preditoras", 
                              ["MES", "DIA_DO_ANO", "UMIDADE_RELATIVA", "PRECIPITACAO"],
@@ -134,7 +117,6 @@ with st.expander("🔧 Configurações do Modelo", expanded=False):
                              ["Regressão Linear", "Random Forest", "Gradient Boosting"])
     test_size = st.slider("Tamanho do conjunto de teste", 0.1, 0.5, 0.2, 0.05)
 
-# Verifica se há dados suficientes para treinar o modelo
 if dff["TEMPERATURA_MEDIA"].notna().sum() > 100:
     df_ml = dff[["DATA", "TEMPERATURA_MEDIA", "UMIDADE_RELATIVA", "PRECIPITACAO"]].dropna().copy()
     df_ml["MES"] = df_ml["DATA"].dt.month

@@ -9,6 +9,6 @@ beautifulsoup4
 lxml
 tqdm
 python-dateutil
-psycopg2-binary  # adicionado
-python-dotenv     # adicionado
+psycopg2-binary
+python-dotenv
 

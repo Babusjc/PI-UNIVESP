@@ -1,14 +1,14 @@
 # Dependências do projeto (atualizadas)
 streamlit
-pandas>=1.5.0
+pandas==1.5.0
 numpy>=1.23.0
 plotly
 scikit-learn
-requests>=2.28.0
+requests==2.28.0
 beautifulsoup4>=4.11.0
 lxml
 tqdm>=4.64.0
 python-dateutil
-psycopg2-binary>=2.9.5
+psycopg2-binary==2.9.5
 python-dotenv>=0.21.0
 sqlalchemy>=1.4.0  # Adicionado para conexão otimizada com NEON
